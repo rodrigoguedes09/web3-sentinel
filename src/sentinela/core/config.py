@@ -103,9 +103,27 @@ class Settings(BaseSettings):
     # ==========================================================================
     # Blockchain Configuration
     # ==========================================================================
-    mainnet_rpc_url: str = Field(default="", description="Ethereum mainnet RPC URL")
-    sepolia_rpc_url: str = Field(default="", description="Sepolia testnet RPC URL")
+    mainnet_rpc_url: str = Field(default="https://eth.llamarpc.com", description="Ethereum mainnet RPC URL")
+    sepolia_rpc_url: str = Field(default="https://rpc.sepolia.org", description="Sepolia testnet RPC URL")
+    polygon_rpc_url: str = Field(default="https://polygon-rpc.com", description="Polygon mainnet RPC URL")
+    polygon_mumbai_rpc_url: str = Field(default="", description="Polygon Mumbai testnet RPC URL")
+    bsc_rpc_url: str = Field(default="https://bsc-dataseed.binance.org", description="BSC mainnet RPC URL")
+    bsc_testnet_rpc_url: str = Field(default="", description="BSC testnet RPC URL")
+    arbitrum_rpc_url: str = Field(default="", description="Arbitrum mainnet RPC URL")
+    optimism_rpc_url: str = Field(default="", description="Optimism mainnet RPC URL")
+    local_node_url: str = Field(default="http://localhost:8545", description="Local node RPC URL")
+    
+    # Explorer API keys (optional, for verified source code)
     etherscan_api_key: str = Field(default="", description="Etherscan API key")
+    polygonscan_api_key: str = Field(default="", description="Polygonscan API key")
+    bscscan_api_key: str = Field(default="", description="BscScan API key")
+    arbiscan_api_key: str = Field(default="", description="Arbiscan API key")
+    optimism_etherscan_api_key: str = Field(default="", description="Optimism Etherscan API key")
+    
+    # RPC Configuration
+    rpc_timeout_seconds: int = Field(default=30, ge=5, le=300, description="RPC request timeout")
+    enable_rpc_integration: bool = Field(default=True, description="Enable direct RPC blockchain access")
+    enable_cross_chain_analysis: bool = Field(default=False, description="Enable cross-chain vulnerability analysis")
 
     # ==========================================================================
     # ChromaDB Configuration
@@ -118,6 +136,29 @@ class Settings(BaseSettings):
         default="hack_postmortems",
         description="Collection name for hack post-mortems",
     )
+    
+    # ==========================================================================
+    # Cache Configuration
+    # ==========================================================================
+    enable_query_cache: bool = Field(default=True, description="Enable intelligent query caching")
+    cache_dir: Path = Field(
+        default=Path("./data/cache"),
+        description="Cache storage directory",
+    )
+    cache_ttl_seconds: int = Field(default=3600, ge=60, le=86400, description="Cache TTL in seconds (1 hour default)")
+    cache_max_size_mb: int = Field(default=100, ge=10, le=1000, description="Maximum cache size in MB")
+    
+    # ==========================================================================
+    # Blockchain Indexer Configuration
+    # ==========================================================================
+    enable_blockchain_indexer: bool = Field(default=False, description="Enable blockchain event indexer")
+    indexer_storage_dir: Path = Field(
+        default=Path("./data/blockchain_index"),
+        description="Indexer storage directory",
+    )
+    indexer_batch_size: int = Field(default=100, ge=10, le=1000, description="Blocks per indexing batch")
+    indexer_poll_interval: int = Field(default=12, ge=5, le=60, description="Seconds between live indexing polls")
+    enable_suspicious_tx_monitoring: bool = Field(default=False, description="Enable suspicious transaction monitoring")
 
     # ==========================================================================
     # Agent Configuration

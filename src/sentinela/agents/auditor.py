@@ -116,6 +116,42 @@ class AuditorAgent(BaseAgent[AuditorOutput]):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.forge_runner = ForgeRunner(settings=self.settings)
+        
+        # Initialize RPC integration if enabled
+        self.rpc_client: RPCClient | None = None
+        self.explorer: UnifiedExplorer | None = None
+        self.query_cache: QueryCache | None = None
+        self.blockchain_cache: BlockchainQueryCache | None = None
+        
+        if self.settings.enable_rpc_integration:
+            try:
+                # Initialize RPC client
+                self.rpc_client = RPCClient(
+                    network=NetworkType.ETHEREUM_MAINNET,
+                    rpc_url=self.settings.mainnet_rpc_url or None,
+                )
+                
+                # Initialize explorer (RPC + optional Etherscan)
+                self.explorer = UnifiedExplorer(
+                    network=NetworkType.ETHEREUM_MAINNET,
+                    rpc_url=self.settings.mainnet_rpc_url or None,
+                    explorer_api_key=self.settings.etherscan_api_key or None,
+                )
+                
+                # Initialize cache if enabled
+                if self.settings.enable_query_cache:
+                    self.query_cache = QueryCache(
+                        cache_dir=self.settings.cache_dir,
+                        ttl_seconds=self.settings.cache_ttl_seconds,
+                        max_size_mb=self.settings.cache_max_size_mb,
+                    )
+                    self.blockchain_cache = BlockchainQueryCache(self.query_cache)
+                
+                logger.info("✅ RPC integration enabled with caching")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RPC integration: {e}")
+                self.rpc_client = None
+                self.explorer = None
 
     @property
     def system_prompt(self) -> str:
@@ -401,3 +437,155 @@ TASK:
             return "High"
         else:
             return "Medium"
+
+    async def enrich_with_onchain_data(
+        self,
+        contract_address: str,
+        hypothesis: AttackHypothesis,
+    ) -> dict[str, Any]:
+        """
+        Enrich vulnerability analysis with on-chain data.
+        
+        Args:
+            contract_address: Contract address to analyze
+            hypothesis: Vulnerability hypothesis
+            
+        Returns:
+            Dictionary with on-chain enrichment data
+        """
+        if not self.rpc_client or not self.explorer:
+            logger.debug("RPC integration disabled, skipping on-chain enrichment")
+            return {}
+
+        enrichment = {}
+
+        try:
+            # Get current block for context
+            current_block = await self.rpc_client.get_block_number()
+            enrichment["current_block"] = current_block
+
+            # Check if contract exists
+            is_contract = await self.explorer.is_contract(contract_address)
+            enrichment["is_deployed_contract"] = is_contract
+
+            if not is_contract:
+                logger.info(f"Address {contract_address} is not a deployed contract")
+                return enrichment
+
+            # Get contract balance (use cache if available)
+            if self.blockchain_cache:
+                balance = await self.blockchain_cache.get_balance(
+                    contract_address,
+                    "ethereum",
+                    current_block,
+                )
+                if balance is None:
+                    balance = await self.rpc_client.get_balance(contract_address)
+                    await self.blockchain_cache.set_balance(
+                        contract_address,
+                        "ethereum",
+                        current_block,
+                        balance,
+                    )
+            else:
+                balance = await self.rpc_client.get_balance(contract_address)
+
+            enrichment["contract_balance_wei"] = balance
+            enrichment["contract_balance_eth"] = float(
+                self.rpc_client.w3.from_wei(balance, "ether")
+            )
+
+            # Get bytecode (cached long-term)
+            if self.blockchain_cache:
+                code = await self.blockchain_cache.get_contract_code(
+                    contract_address,
+                    "ethereum",
+                )
+                if code is None:
+                    code = await self.rpc_client.get_code(contract_address)
+                    await self.blockchain_cache.set_contract_code(
+                        contract_address,
+                        "ethereum",
+                        code,
+                    )
+            else:
+                code = await self.rpc_client.get_code(contract_address)
+
+            enrichment["bytecode_size"] = len(code)
+
+            # Try to get verified source code (if Etherscan key available)
+            if self.settings.etherscan_api_key:
+                source = await self.explorer.get_contract_source(contract_address)
+                if source:
+                    enrichment["is_verified"] = True
+                    enrichment["compiler_version"] = source.compiler_version
+                    enrichment["optimization_enabled"] = source.optimization_used
+                    logger.info(f"✅ Contract verified on Etherscan")
+                else:
+                    enrichment["is_verified"] = False
+            
+            # Estimate risk based on balance
+            balance_eth = enrichment["contract_balance_eth"]
+            if balance_eth > 1000:
+                enrichment["risk_level"] = "CRITICAL - High value contract"
+            elif balance_eth > 100:
+                enrichment["risk_level"] = "HIGH - Significant funds at risk"
+            elif balance_eth > 10:
+                enrichment["risk_level"] = "MEDIUM - Moderate funds at risk"
+            else:
+                enrichment["risk_level"] = "LOW - Limited funds at risk"
+
+            logger.info(
+                f"📊 On-chain enrichment: Balance {balance_eth:.4f} ETH, "
+                f"Bytecode {enrichment['bytecode_size']} bytes"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to enrich with on-chain data: {e}")
+            enrichment["error"] = str(e)
+
+        return enrichment
+
+    async def check_cross_chain_deployment(
+        self,
+        contract_address: str,
+    ) -> dict[str, bool]:
+        """
+        Check if contract is deployed on multiple chains.
+        
+        Args:
+            contract_address: Contract address
+            
+        Returns:
+            Dictionary mapping network to deployment status
+        """
+        if not self.settings.enable_cross_chain_analysis:
+            return {}
+
+        try:
+            from sentinela.integrations.cross_chain import CrossChainAnalyzer
+            from sentinela.integrations.explorer import MultiChainExplorer
+
+            # Initialize multi-chain explorer
+            multi_explorer = MultiChainExplorer()
+            multi_explorer.add_network(NetworkType.ETHEREUM_MAINNET, self.settings.mainnet_rpc_url)
+            multi_explorer.add_network(NetworkType.POLYGON, self.settings.polygon_rpc_url)
+            multi_explorer.add_network(NetworkType.BSC, self.settings.bsc_rpc_url)
+
+            # Find deployments
+            analyzer = CrossChainAnalyzer(multi_explorer)
+            deployments = await analyzer.find_contract_deployments(contract_address)
+
+            result = {d.network.value: True for d in deployments}
+            
+            if len(deployments) > 1:
+                logger.warning(
+                    f"🌍 Contract deployed on {len(deployments)} chains! "
+                    f"Vulnerability may propagate across: {', '.join(result.keys())}"
+                )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Cross-chain check failed: {e}")
+            return {}
