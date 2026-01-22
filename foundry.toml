@@ -1,0 +1,42 @@
+[profile.default]
+src = "contracts/src"
+out = "contracts/out"
+libs = ["contracts/lib"]
+test = "contracts/test"
+cache_path = "contracts/cache"
+
+# Compiler settings
+solc_version = "0.8.24"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+
+# Testing settings
+verbosity = 3
+fuzz = { runs = 256, max_test_rejects = 65536 }
+invariant = { runs = 256, depth = 15 }
+
+# Gas reporting
+gas_reports = ["*"]
+
+# Formatter
+fmt = { line_length = 120, tab_width = 4, bracket_spacing = true }
+
+[profile.ci]
+verbosity = 4
+fuzz = { runs = 1000 }
+
+[profile.exploit]
+# Profile for running exploit tests
+verbosity = 4
+via_ir = false
+# Enable tracing for detailed exploit analysis
+ffi = true
+
+[rpc_endpoints]
+mainnet = "${MAINNET_RPC_URL}"
+sepolia = "${SEPOLIA_RPC_URL}"
+anvil = "http://127.0.0.1:8545"
+
+[etherscan]
+mainnet = { key = "${ETHERSCAN_API_KEY}" }
