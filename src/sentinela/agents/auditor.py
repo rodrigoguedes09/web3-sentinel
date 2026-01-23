@@ -25,6 +25,7 @@ from sentinela.core.state import (
     VulnerabilityReport,
 )
 from sentinela.integrations.foundry import ForgeRunner
+from sentinela.integrations.rpc import NetworkType
 
 logger = logging.getLogger(__name__)
 
@@ -293,13 +294,48 @@ TASK:
             proven.append(hypothesis)
             state["proven_vulnerabilities"] = proven
 
-            # Generate report
+            # Enrich with on-chain data if RPC integration enabled
+            onchain_data = None
+            cross_chain_data = None
+            
+            # Try to extract contract address from state or test output
+            contract_address = state.get("contract_address")
+            
+            # If no address provided, try to extract from test output (deployment logs)
+            if not contract_address and test_result.stdout:
+                # Look for deployment address in test output
+                # Forge outputs: "Contract deployed at: 0x..."
+                import re
+                address_pattern = r"0x[a-fA-F0-9]{40}"
+                matches = re.findall(address_pattern, test_result.stdout)
+                if matches:
+                    contract_address = matches[0]
+                    logger.info(f"📍 Extracted contract address from test output: {contract_address}")
+            
+            if self.rpc_client and contract_address:
+                logger.info("📊 Enriching report with on-chain data...")
+                try:
+                    onchain_data = await self.enrich_with_onchain_data(
+                        contract_address=state["contract_address"],
+                        hypothesis=hypothesis,
+                    )
+                    
+                    if self.settings.enable_cross_chain_analysis:
+                        cross_chain_data = await self.check_cross_chain_deployment(
+                            contract_address=state["contract_address"],
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to enrich with on-chain data: {e}")
+
+            # Generate report with enrichment
             report = await self._generate_report(
                 hypothesis=hypothesis,
                 exploit_test=state.get("current_exploit_test"),
                 test_result=test_result,
                 severity=auditor_output.severity,
                 recommendations=auditor_output.recommendations,
+                onchain_data=onchain_data,
+                cross_chain_deployments=cross_chain_data,
             )
             reports = state.get("final_reports", [])
             reports.append(report)
@@ -403,8 +439,29 @@ TASK:
         test_result: TestResult,
         severity: str,
         recommendations: list[str],
+        onchain_data: dict[str, Any] | None = None,
+        cross_chain_deployments: dict[str, bool] | None = None,
     ) -> VulnerabilityReport:
         """Generate a vulnerability report for a proven exploit."""
+        # Enhance recommendations based on on-chain data
+        enhanced_recommendations = recommendations.copy()
+        
+        if onchain_data:
+            # Add context-aware recommendations
+            balance_eth = onchain_data.get("contract_balance_eth", 0)
+            if balance_eth > 100:
+                enhanced_recommendations.insert(0, 
+                    f"⚠️ URGENT: Contract holds {balance_eth:.2f} ETH - Deploy fix immediately")
+            
+            if not onchain_data.get("is_verified"):
+                enhanced_recommendations.append(
+                    "Verify contract source code on block explorers for transparency")
+        
+        if cross_chain_deployments and len(cross_chain_deployments) > 1:
+            networks = ", ".join(cross_chain_deployments.keys())
+            enhanced_recommendations.insert(0,
+                f"🌍 CRITICAL: Deploy fix on ALL chains simultaneously: {networks}")
+        
         return VulnerabilityReport(
             hypothesis=hypothesis,
             exploit_test=exploit_test or ExploitTest(
@@ -415,8 +472,10 @@ TASK:
             ),
             test_result=test_result,
             severity=severity or self._infer_severity(hypothesis),
-            recommendations=recommendations,
+            recommendations=enhanced_recommendations,
             references=hypothesis.similar_hacks,
+            onchain_data=onchain_data,
+            cross_chain_deployments=cross_chain_deployments,
         )
 
     def _infer_severity(self, hypothesis: AttackHypothesis) -> str:

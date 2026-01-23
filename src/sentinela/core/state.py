@@ -148,6 +148,10 @@ class VulnerabilityReport(BaseModel):
     severity: str = Field(..., description="Final severity assessment")
     recommendations: list[str] = Field(default_factory=list, description="Remediation recommendations")
     references: list[str] = Field(default_factory=list, description="Reference links")
+    
+    # On-chain enrichment data (optional)
+    onchain_data: dict[str, Any] | None = Field(default=None, description="On-chain enrichment data")
+    cross_chain_deployments: dict[str, bool] | None = Field(default=None, description="Cross-chain deployment status")
 
 
 class ExplorerOutput(BaseModel):

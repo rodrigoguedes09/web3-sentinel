@@ -395,6 +395,7 @@ class SentinelaOrchestrator:
         source_code: str | None = None,
         contract_name: str = "",
         thread_id: str = "default",
+        contract_address: str | None = None,
     ) -> AuditResult:
         """
         Run a complete security audit on a smart contract.
@@ -404,6 +405,7 @@ class SentinelaOrchestrator:
             source_code: Optional pre-loaded source code
             contract_name: Name of the main contract
             thread_id: Thread ID for checkpointing
+            contract_address: Deployed contract address for on-chain enrichment (optional)
             
         Returns:
             AuditResult with findings and reports
@@ -425,6 +427,11 @@ class SentinelaOrchestrator:
             contract_name=contract_name,
             max_reflections=self.settings.max_reflection_loops,
         )
+        
+        # Add contract address for on-chain enrichment if provided
+        if contract_address:
+            initial_state["contract_address"] = contract_address
+            logger.info(f"On-chain enrichment enabled for {contract_address}")
 
         logger.info(f"Starting audit of {contract_name}")
 
